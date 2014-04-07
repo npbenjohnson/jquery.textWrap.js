@@ -79,6 +79,42 @@ jQuery.fn.extend({
 
         //#endregion
 
+        //#region pure javascript jquery reworks
+        function unwrap(node) {
+            var parent = node.parentNode;
+            var removed = parent.removeChild(node);
+            parent.parentNode.replaceChild(removed, parent);
+            return node;
+        }
+
+        function wrap(node, className) {
+            var element = document.createElement('SPAN');
+            element.className = className;
+            element.style.display = 'none';
+            node.parentNode.insertBefore(element, node);
+            element.insertBefore(node);
+            return node;
+        }
+
+        function detach(node) {
+            if (node.parentNode)
+                node.parentNode.removeChild(node);
+            return node;
+        }
+
+        function before(beforeNode, afterNode) {
+            if (afterNode.parentNode)
+                afterNode.parentNode.insertBefore(beforeNode, afterNode);
+            return beforeNode;
+        }
+
+        function after(beforeNode, afterNode) {
+            if (beforeNode.parentNode)
+                beforeNode.parentNode.insertBefore(afterNode, beforeNode.nextSibling);
+            return afterNode;
+        }
+        //#endregion
+
         //#region Main (horribly unwieldly) functions
         // Change the text currently being measured
         function refreshElementText() {
@@ -87,52 +123,52 @@ jQuery.fn.extend({
             textDelta = Math.abs(textDelta);
 
             // detach suffix
-            if ($suffixElement) $suffixElement.detach();
+            if ($suffixElement) detach($suffixElement[0]);
 
-            var $changeNode = isAdd ? $hiddenTextNodes.first() : $visibleTextNodes.last();
+            var changeNode = isAdd ? $hiddenTextNodes[0] : $visibleTextNodes.last()[0];
             // Normalize if this is an add, or the removed node is being moved next to the last text node
             var normalize;
 
             // Hide nodes until delta is shorter than node length
-            while ($changeNode.length && (nodeTextLength = $changeNode.text().length) <= textDelta) {
+            while (changeNode && (nodeTextLength = changeNode.data.length) <= textDelta) {
                 normalize = isAdd ||
                ($hiddenTextNodes.length > 0
-               && ($changeNode[0]
-               && $changeNode[0].nextSibling
-               && $changeNode[0].nextSibling.firstChild === $hiddenTextNodes[0])),
+               && (changeNode
+               && changeNode.nextSibling
+               && changeNode.nextSibling.firstChild === $hiddenTextNodes[0])),
                nodeTextLength;
                 // Move whole node
                 if (isAdd)
                     // unwrap whole hidden node
-                    $changeNode.unwrap();
+                    unwrap(changeNode);
                 else
                     if (normalize)
                         // move visible node into hidden span
-                        $hiddenTextNodes.first().before($changeNode);
+                        before(changeNode, $hiddenTextNodes[0]);
                     else
                         // hide wrap visible node
-                        wrapHide($changeNode, settings.hiddenClass);
+                        wrap(changeNode, settings.hiddenClass);
                 // try to normalize the node that moved
-                if (normalize && normalizeDeleteNode($changeNode[0], isAdd))
+                if (normalize && normalizeDeleteNode(changeNode, isAdd))
                     // node was deleted so old tracking can be removed
                     removeNodeTracking(!isAdd);
                 else
                     // node was not deleted, shift tracking over 1 spot
                     shiftNodeTracking(isAdd);
                 // Go to next node
-                $changeNode = isAdd ? $hiddenTextNodes.first() : $visibleTextNodes.last();
+                changeNode = isAdd ? $hiddenTextNodes[0] : $visibleTextNodes.last()[0];
                 textDelta -= nodeTextLength;
             }
             // Change ends in middle of node
             if (textDelta > 0) {
                 normalize = isAdd ||
                ($hiddenTextNodes.length > 0
-               && ($changeNode[0]
-               && $changeNode[0].nextSibling
-               && $changeNode[0].nextSibling.firstChild === $hiddenTextNodes[0])),
+               && (changeNode
+               && changeNode.nextSibling
+               && changeNode.nextSibling.firstChild === $hiddenTextNodes[0])),
                nodeTextLength;
                 // node is the second half of split text which is a new element 
-                var rightNode = $changeNode[0].splitText(isAdd ? textDelta : nodeTextLength - textDelta),
+                var rightNode = changeNode.splitText(isAdd ? textDelta : nodeTextLength - textDelta),
                 // node is first half of split and will remain tracked
                     leftNode = rightNode.previousSibling;
 
@@ -147,10 +183,10 @@ jQuery.fn.extend({
                 else {
                     if (normalize)
                         // On hide, move second node into hide span
-                        $hiddenTextNodes.first().before(rightNode);
+                        before(rightNode, $hiddenTextNodes[0]);
                     else
                         // On non-normalize hide, wrap second node and track
-                        wrapHide($(rightNode), settings.hiddenClass);
+                        wrap(rightNode, settings.hiddenClass);
                 }
                 // add new node to tracking if not deleted
                 if (isAdd || !normalize || !normalizeDeleteNode(rightNode, false))
@@ -158,7 +194,7 @@ jQuery.fn.extend({
             }
             // Attach suffix
             if ($suffixElement && $suffixElement.parent().length === 0)
-                $visibleTextNodes.last().after($suffixElement);
+                after($visibleTextNodes.last()[0], $suffixElement[0]);
 
             foundWidth = $element.width();
         }
