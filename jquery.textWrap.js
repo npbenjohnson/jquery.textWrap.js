@@ -213,34 +213,43 @@ jQuery.fn.extend({
 
         // Wraps a single text line, returns true if wrap is complete, false if line needs to be reprocessed
         function wrapTextLine() {
+            var lengthAdjust = 0;
+
             // Adjust using binary-ish search
             while (textLowBound < textHighBound) {
 
                 // Use the current guess first if line is being reprocessed
-                if (!reprocessingLine) {
+                if (!reuseGuess) {
                     // Get next guess using ratio of desiredwidth / foundWidth
                     var suffixAdd = (suffix && suffix.parentNode ? suffix.firstChild.data.length : 0);
                     var newCharCountGuess = Math.round(desiredWidth / foundWidth * (textLengthGuess + suffixAdd));
                     setTextLengthGuess(Math.min(Math.max(newCharCountGuess, textLowBound + 1), textHighBound));
                 }
                 else
-                    reprocessingLine = false;
+                    reuseGuess = false;
 
                 // Refresh displayed text
                 refreshElementText();
                 if (hiddenTextNodes.length === 0) { return true; }
 
                 // Update search parameters
-                if (foundWidth < desiredWidth) textLowBound = textLengthGuess;
+                if (foundWidth < desiredWidth) {
+                    textLowBound = textLengthGuess;
+                    if (textLowBound === textHighBound - 1 && textLengthIsSpace(textHighBound))
+                        break; // both bounds are the same space break
+                }
                 if (foundWidth >= desiredWidth) {
                     textHighBound = textLengthGuess - 1;
                     // Exit on 0 length lines
                     if (textLengthGuess === 0)
                         return true;
+                    if (textLowBound === textHighBound - 1 && textLengthIsSpace(textHighBound)) {
+                        lengthAdjust -= 1
+                        break; // both bounds are the same space break
+                    }
                 }
             }
 
-            var lengthAdjust = 0;
             if (foundWidth >= desiredWidth)
                 // last check must have found max, drop back a character
                 lengthAdjust -= 1;
@@ -291,10 +300,7 @@ jQuery.fn.extend({
 
         // Iterates lines to wrap and truncate all text
         function wrapAllTextLines() {
-            // Tracks if current iteration of text search is making
-            // a suffix adjustment
-            while (foundWidth >= desiredWidth || hiddenTextNodes.length > 0 || reprocessingLine) {
-
+            do {
                 if (lineNumber === settings.lines) {
                     // Final iteration, justify to elipses
                     setSuffix('…');
@@ -302,12 +308,9 @@ jQuery.fn.extend({
                 }
 
                 // Find a character breakpoint, adjust must be applied to text before finalizing line
-                reprocessingLine = !wrapTextLine();
-                // Last line, no end of line processing required
-                if (lineNumber === settings.lines || (hiddenTextNodes.length === 0 && !reprocessingLine))
-                    break;
+                reuseGuess = !wrapTextLine();
 
-                if (!reprocessingLine) {
+                if (hiddenTextNodes.length !== 0 && lineNumber !== settings.lines && !reuseGuess) {
                     // Break off the finalized line and reset tracking
                     if (suffix && textLengthIsSpace(textLengthGuess)) {
                         // Remove '-' suffix if breaking on a space after adjustments
@@ -317,7 +320,7 @@ jQuery.fn.extend({
 
                     // Add line break
                     if (suffix)
-                       visibleTextNodes.push(suffix);
+                        visibleTextNodes.push(suffix);
                     var br = document.createElement('BR');
                     br.className = settings.brClass;
                     after(visibleTextNodes.slice(-1)[0], br);
@@ -331,14 +334,12 @@ jQuery.fn.extend({
                     textLengthGuessPrev = 0;
                     textHighBound = wholeText.length;
                     textLengthGuess = Math.min(textLengthGuess, wholeText.length);
-                    reprocessingLine = wholeText.length > 0;
+                    reuseGuess = wholeText.length > 0;
                     // lock suffix element
-                    if (suffix)
-                        setSuffix(null);
-                    if (settings.lines > 0)
-                        lineNumber++;
+                    if (suffix) setSuffix(null);
+                    if (settings.lines > 0) lineNumber++;
                 }
-            }
+            } while (hiddenTextNodes.length > 0 || reuseGuess)
             // Remove the spans hiding valid lines
             $element.find('.' + settings.tempLineClass).each(function () { unwrapInner(this); });
         }
@@ -529,7 +530,7 @@ jQuery.fn.extend({
             visibleTextNodes,
 
             // Tracks if a line must have more than 1 iteration
-            reprocessingLine = false;
+            reuseGuess = false;
 
         //#endregion
 
