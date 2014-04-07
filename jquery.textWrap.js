@@ -1,5 +1,4 @@
 // Examples and license at https://github.com/npbenjohnson/jquery.textWrap.js
-
 (function ($) {
     $.event.special.removed = {
         remove: function (o) {
@@ -498,8 +497,12 @@ jQuery.fn.extend({
             if (changed) {
                 // init wrap info
                 var contents = getTextContents($element.find('*').andSelf());
-                contents.each(function () { if (this.parentNode) normalizeDeleteNode(this); });
-
+                contents.each(
+                    function () {
+                        if (this.parentNode) normalizeDeleteNode(this);
+                    });
+                // merge sometimes merges text nodes into empty nodes, second call to fix that
+                contents = getTextContents($element.find('*').andSelf());
                 $visibleTextNodes = $(contents.filter(function () { return this.parentNode; }));
                 if ((wholeText = $visibleTextNodes.text()).length > 0) {
                     validWrapLengths = getValidWrapLengths();
