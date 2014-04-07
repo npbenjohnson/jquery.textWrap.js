@@ -55,8 +55,8 @@ jQuery.fn.extend({
             var hidden = $element.find('span.' + settings.hiddenClass);
             var br = $element.find('br.' + settings.brClass + ', span.' + settings.suffixClass);
             var changed = hidden.length > 0 || br.length > 0;
-            hidden.contents().unwrap();
-            br.remove();
+            hidden.each(function () { unwrapInner(this); });
+            br.each(function () { detach(this); });
             return changed;
         }
 
@@ -80,38 +80,50 @@ jQuery.fn.extend({
         //#endregion
 
         //#region pure javascript jquery reworks
-        function unwrap(node) {
-            var parent = node.parentNode;
-            var removed = parent.removeChild(node);
-            parent.parentNode.replaceChild(removed, parent);
-            return node;
+        function text(nodeList) {
+            return nodeList.map(function (item) { return item.data; }).join('');
         }
 
-        function wrap(node, className) {
+        function unwrap(node) {
+            var parent = node.parentNode;
+            for (var i = parent.childNodes.length - 1; i >= 0; i--) {
+                before(parent.childNodes[i], parent);
+            }
+            parent.parentNode.removeChild(parent);
+        }
+
+        function unwrapInner(node) {
+            if (node.firstChild)
+                unwrap(node.firstChild);
+            else
+                node.parentNode.removeChild(node);
+        }
+
+        function wrap(node, className, hidden) {
             var element = document.createElement('SPAN');
-            element.className = className;
-            element.style.display = 'none';
-            node.parentNode.insertBefore(element, node);
+            if (className)
+                element.className = className;
+            if (hidden && settings.useInlineStyles)
+                element.style.display = 'none';
+            if (node.parentNode)
+                node.parentNode.insertBefore(element, node);
             element.insertBefore(node);
-            return node;
+            return element;
         }
 
         function detach(node) {
             if (node.parentNode)
                 node.parentNode.removeChild(node);
-            return node;
         }
 
         function before(beforeNode, afterNode) {
             if (afterNode.parentNode)
                 afterNode.parentNode.insertBefore(beforeNode, afterNode);
-            return beforeNode;
         }
 
         function after(beforeNode, afterNode) {
             if (beforeNode.parentNode)
                 beforeNode.parentNode.insertBefore(afterNode, beforeNode.nextSibling);
-            return afterNode;
         }
         //#endregion
 
@@ -123,19 +135,19 @@ jQuery.fn.extend({
             textDelta = Math.abs(textDelta);
 
             // detach suffix
-            if ($suffixElement) detach($suffixElement[0]);
+            if (suffix) detach(suffix);
 
-            var changeNode = isAdd ? $hiddenTextNodes[0] : $visibleTextNodes.last()[0];
+            var changeNode = isAdd ? hiddenTextNodes[0] : visibleTextNodes.slice(-1)[0];
             // Normalize if this is an add, or the removed node is being moved next to the last text node
             var normalize;
 
             // Hide nodes until delta is shorter than node length
             while (changeNode && (nodeTextLength = changeNode.data.length) <= textDelta) {
                 normalize = isAdd ||
-               ($hiddenTextNodes.length > 0
+               (hiddenTextNodes.length > 0
                && (changeNode
                && changeNode.nextSibling
-               && changeNode.nextSibling.firstChild === $hiddenTextNodes[0])),
+               && changeNode.nextSibling.firstChild === hiddenTextNodes[0])),
                nodeTextLength;
                 // Move whole node
                 if (isAdd)
@@ -144,10 +156,10 @@ jQuery.fn.extend({
                 else
                     if (normalize)
                         // move visible node into hidden span
-                        before(changeNode, $hiddenTextNodes[0]);
+                        before(changeNode, hiddenTextNodes[0]);
                     else
                         // hide wrap visible node
-                        wrap(changeNode, settings.hiddenClass);
+                        wrap(changeNode, settings.hiddenClass, true);
                 // try to normalize the node that moved
                 if (normalize && normalizeDeleteNode(changeNode, isAdd))
                     // node was deleted so old tracking can be removed
@@ -156,16 +168,16 @@ jQuery.fn.extend({
                     // node was not deleted, shift tracking over 1 spot
                     shiftNodeTracking(isAdd);
                 // Go to next node
-                changeNode = isAdd ? $hiddenTextNodes[0] : $visibleTextNodes.last()[0];
+                changeNode = isAdd ? hiddenTextNodes[0] : visibleTextNodes.slice(-1)[0];
                 textDelta -= nodeTextLength;
             }
             // Change ends in middle of node
             if (textDelta > 0) {
                 normalize = isAdd ||
-               ($hiddenTextNodes.length > 0
+               (hiddenTextNodes.length > 0
                && (changeNode
                && changeNode.nextSibling
-               && changeNode.nextSibling.firstChild === $hiddenTextNodes[0])),
+               && changeNode.nextSibling.firstChild === hiddenTextNodes[0])),
                nodeTextLength;
                 // node is the second half of split text which is a new element 
                 var rightNode = changeNode.splitText(isAdd ? textDelta : nodeTextLength - textDelta),
@@ -183,18 +195,18 @@ jQuery.fn.extend({
                 else {
                     if (normalize)
                         // On hide, move second node into hide span
-                        before(rightNode, $hiddenTextNodes[0]);
+                        before(rightNode, hiddenTextNodes[0]);
                     else
                         // On non-normalize hide, wrap second node and track
-                        wrap(rightNode, settings.hiddenClass);
+                        wrap(rightNode, settings.hiddenClass, true);
                 }
                 // add new node to tracking if not deleted
                 if (isAdd || !normalize || !normalizeDeleteNode(rightNode, false))
                     addNodeTracking(rightNode, false);
             }
             // Attach suffix
-            if ($suffixElement && $suffixElement.parent().length === 0)
-                after($visibleTextNodes.last()[0], $suffixElement[0]);
+            if (suffix)
+                after(visibleTextNodes.slice(-1)[0], suffix);
 
             foundWidth = $element.width();
         }
@@ -207,7 +219,7 @@ jQuery.fn.extend({
                 // Use the current guess first if line is being reprocessed
                 if (!reprocessingLine) {
                     // Get next guess using ratio of desiredwidth / foundWidth
-                    var suffixAdd = ($suffixElement && $suffixElement.parent().length === 1 ? suffixLength : 0);
+                    var suffixAdd = (suffix && suffix.parentNode ? suffix.firstChild.data.length : 0);
                     var newCharCountGuess = Math.round(desiredWidth / foundWidth * (textLengthGuess + suffixAdd));
                     setTextLengthGuess(Math.min(Math.max(newCharCountGuess, textLowBound + 1), textHighBound));
                 }
@@ -216,7 +228,7 @@ jQuery.fn.extend({
 
                 // Refresh displayed text
                 refreshElementText();
-                if ($hiddenTextNodes.length === 0) { return true; }
+                if (hiddenTextNodes.length === 0) { return true; }
 
                 // Update search parameters
                 if (foundWidth < desiredWidth) textLowBound = textLengthGuess;
@@ -237,6 +249,7 @@ jQuery.fn.extend({
                 // Snap index to a valid wrap length
                 var lowIndex = 0,
                     highIndex = validWrapLengths.length,
+                    suffixLength = (suffix ? suffix.firstChild.data.length : 0),
                     // Use adjusted length because these indexes were calculated without suffixes
                     // and before wholetext had lines sliced out.
                     relativeLength = (textLengthGuess + lengthAdjust) + lineTextOffset + suffixLength,
@@ -250,7 +263,7 @@ jQuery.fn.extend({
             }
 
             // check if this is a word break
-            if ($suffixElement === null && !textLengthIsSpace(textLengthGuess + lengthAdjust)) {
+            if (suffix === null && !textLengthIsSpace(textLengthGuess + lengthAdjust)) {
                 if (textLengthIsSpace(textLengthGuess + lengthAdjust - 1)) {
                     //character before break is a space, move break back a character
                     lengthAdjust -= 1;
@@ -280,7 +293,7 @@ jQuery.fn.extend({
         function wrapAllTextLines() {
             // Tracks if current iteration of text search is making
             // a suffix adjustment
-            while (foundWidth >= desiredWidth || $hiddenTextNodes.length > 0 || reprocessingLine) {
+            while (foundWidth >= desiredWidth || hiddenTextNodes.length > 0 || reprocessingLine) {
 
                 if (lineNumber === settings.lines) {
                     // Final iteration, justify to elipses
@@ -291,25 +304,27 @@ jQuery.fn.extend({
                 // Find a character breakpoint, adjust must be applied to text before finalizing line
                 reprocessingLine = !wrapTextLine();
                 // Last line, no end of line processing required
-                if (lineNumber === settings.lines || ($hiddenTextNodes.length === 0 && !reprocessingLine))
+                if (lineNumber === settings.lines || (hiddenTextNodes.length === 0 && !reprocessingLine))
                     break;
 
                 if (!reprocessingLine) {
                     // Break off the finalized line and reset tracking
-                    if ($suffixElement && textLengthIsSpace(textLengthGuess)) {
+                    if (suffix && textLengthIsSpace(textLengthGuess)) {
                         // Remove '-' suffix if breaking on a space after adjustments
-                        $suffixElement.remove();
+                        detach(suffix);
                         setSuffix(null);
                     }
 
                     // Add line break
-                    if ($suffixElement)
-                        $visibleTextNodes = $visibleTextNodes.add($suffixElement);
-                    $visibleTextNodes.last().after('<br class="' + settings.brClass + '"/>');
-                    wrapHide($visibleTextNodes, settings.tempLineClass);
+                    if (suffix)
+                       visibleTextNodes.push(suffix);
+                    var br = document.createElement('BR');
+                    br.className = settings.brClass;
+                    after(visibleTextNodes.slice(-1)[0], br);
+                    visibleTextNodes.forEach(function (item) { wrap(item, settings.tempLineClass, true) });
 
                     // reset tracking values and slice off finalized line
-                    $visibleTextNodes = $();
+                    visibleTextNodes = [];
                     lineTextOffset += textLengthGuess;
                     wholeText = wholeText.slice(textLengthGuess);
                     textLowBound = -1;
@@ -318,14 +333,14 @@ jQuery.fn.extend({
                     textLengthGuess = Math.min(textLengthGuess, wholeText.length);
                     reprocessingLine = wholeText.length > 0;
                     // lock suffix element
-                    if ($suffixElement)
+                    if (suffix)
                         setSuffix(null);
                     if (settings.lines > 0)
                         lineNumber++;
                 }
             }
             // Remove the spans hiding valid lines
-            $element.find('.' + settings.tempLineClass).contents().unwrap();
+            $element.find('.' + settings.tempLineClass).each(function () { unwrapInner(this); });
         }
 
         //#endregion
@@ -347,20 +362,20 @@ jQuery.fn.extend({
         function removeNodeTracking(removeVisible) {
             var removed;
             if (removeVisible) {
-                removed = $visibleTextNodes.last();
-                $visibleTextNodes = $visibleTextNodes.slice(0, -1);
+                removed = visibleTextNodes.slice(-1)[0];
+                visibleTextNodes = visibleTextNodes.slice(0, -1);
             }
             else {
-                removed = $hiddenTextNodes.first();
-                $hiddenTextNodes = $hiddenTextNodes.slice(1);
+                removed = hiddenTextNodes[0];
+                hiddenTextNodes = hiddenTextNodes.slice(1);
             }
             return removed;
         }
 
         // Add a node to one of the tracking lists
         function addNodeTracking(node, addVisible) {
-            if (addVisible) $visibleTextNodes = $visibleTextNodes.add(node);
-            else $hiddenTextNodes = $hiddenTextNodes.add(node);
+            if (addVisible) visibleTextNodes.push(node);
+            else hiddenTextNodes.unshift(node);
         }
 
         // normalize with only sibling depth, returns true if original node is removed
@@ -391,8 +406,7 @@ jQuery.fn.extend({
         }
         // Set the suffix for the current line (null to clear)
         function setSuffix(sfx) {
-            suffixLength = sfx ? sfx.length : 0;
-            $suffixElement = sfx ? $('<span class="' + settings.suffixClass + '">' + sfx + '</span>') : null;
+            suffix = sfx ? wrap(document.createTextNode(sfx), settings.suffixClass) : null;
         }
 
         // Check if whole text character is a space char (can be on either side of character)
@@ -400,12 +414,6 @@ jQuery.fn.extend({
             return /[\t\n\r ]/.test(wholeText[index]) || /[\t\n\r ]/.test(wholeText[index - 1]);
         }
 
-        function wrapHide($node, className) {
-            $node.wrap('<span' +
-                (settings.useInlineStyles ? ' style="display:none"' : '') +
-                (className ? ' class="' + className + '"' : '') +
-                '></span>');
-        }
         //#endregion
 
         //#region Initialization Functions
@@ -511,15 +519,14 @@ jQuery.fn.extend({
             textLengthGuessPrev,
 
             // current temporary suffix element if present
-            suffixLength = 0,
-            $suffixElement = null,
+            suffix = null,
 
             // Clone element for size testing
             $element,
             // list of currently hidden text nodes
-            $hiddenTextNodes = $(),
+            hiddenTextNodes = [],
             // currently visible text nodes
-            $visibleTextNodes,
+            visibleTextNodes,
 
             // Tracks if a line must have more than 1 iteration
             reprocessingLine = false;
@@ -539,8 +546,8 @@ jQuery.fn.extend({
                     });
                 // merge sometimes merges text nodes into empty nodes, second call to fix that
                 contents = getTextContents($element.find('*').andSelf());
-                $visibleTextNodes = $(contents.filter(function () { return this.parentNode; }));
-                if ((wholeText = $visibleTextNodes.text()).length > 0) {
+                visibleTextNodes = $.makeArray(contents.filter(function () { return this.parentNode; }));
+                if ((wholeText = text(visibleTextNodes)).length > 0) {
                     validWrapLengths = getValidWrapLengths();
                     textLengthGuessPrev = textLengthGuess = textHighBound = wholeText.length;
 
