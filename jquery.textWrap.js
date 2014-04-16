@@ -1,6 +1,7 @@
-// Examples and license at https://github.com/npbenjohnson/jquery.textWrap.js
+﻿// Examples and license at https://github.com/npbenjohnson/jquery.textWrap.js
 
 jQuery.fn.extend({
+    // Extension adds a textwrapper with specified options targeting specified element
     textWrap: function (options, force) {
         var wrapper = this.data('tw.wrapper');
 
@@ -46,12 +47,13 @@ jQuery.fn.extend({
     }
 });
 
+// User configurable settings
 TextWrapper.prototype.TextWrapperSettings = function TextWrapperSettings() {
     // Width to wrap to (% or px)
     this.width = '100%';
     // number = number of lines 0 = infinite %= number of lines that fit in % height
     this.maxLines = 0;
-    this.overflow = 'elipse';
+    this.overflow = 'ellipsis';
     // Recalculate on window.resize (will only be used if % width)
     this.handleResize = true;
     // Character count which must stay on the line for a word to break
@@ -66,7 +68,7 @@ TextWrapper.prototype.TextWrapperSettings = function TextWrapperSettings() {
     this.useRangeIfAvailable = true;
 }
 new TextWrapper.prototype.TextWrapperSettings();
-
+// State tracking and settings for TextWrapper instance
 TextWrapper.prototype.TextWrapperModel = function TextWrapperModel(element, settings) {
     if (!settings)
         settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -84,30 +86,24 @@ TextWrapper.prototype.TextWrapperModel = function TextWrapperModel(element, sett
     this.lastBreakIndex = 0;
     this.suffix = null;
     this.suffixBounds = null;
-    this.staticWidthStack = [0];
+    this.staticWidthStack = [];
     this.staticWidth = 0;
+    this.hasLineLimit = settings.maxLines > 0;
 }
 
 function TextWrapper(element, settings) {
-    // Reset model for a new wrap
-    function resetModel(state) {
-        state.splitNode = state.suffix = state.suffixBounds = null;
-        state.splitIndex = state.breaks = state.lastBreakIndex = state.staticWidth = 0;
-        state.staticWidthStack = [0];
-    }
-    this._resetModel = resetModel;
 
     // Perform a wrap
     function wrap(state, forceRefresh) {
-        if (!refreshBounds(state, forceRefresh)) return; // No change in size
-        removeWrap(state); // Clear previous formatting
-        state.children = flattenElementTree(state.element);
+        if (!isBoundsChanged(state.elementBounds, forceRefresh)) return; // No change in size
+        clearFormatting(state); // Clear previous formatting
+        state.children = getFlattenedChildren(state.element);
         if (state.children.length === 0) return; // Exit if no children to wrap
-        resetModel(state);// Reset wrapping controls
+        resetState(state);// Reset wrapping controls
         // Break lines
-        breakWrapPoints(state);
-        if (state.splitIndex !== state.children.length && state.settings.maxLines > 0)
-            hideLevels(state); // Hide overflow
+        wrapLines(state);
+        if (state.splitIndex !== state.children.length && state.hasLineLimit)
+            hideOverflow(state);
         if (state.textWrappers.length > 0)
             state.textWrappers.forEach(unwrapInner); //Destroy text wrappers
         if (state.suffix) deleteNode(state.suffix);
@@ -115,69 +111,82 @@ function TextWrapper(element, settings) {
     }
     this.wrap = function (force) { wrap(this.model, force); }
 
-    // Get new bounds, return true if refresh required
-    function refreshBounds(state, forceRefresh) {
-        var ol = state.elementBounds.getInnerLeft(),
-            or = state.elementBounds.getInnerRight();
-        state.elementBounds.resetRect();
-        return forceRefresh || or !== state.elementBounds.getInnerRight() ||
-            ol !== state.elementBounds.getInnerLeft();
+    //#region State Methods
+    // Reset model for a new wrap
+    function resetState(state) {
+        state.splitNode = state.suffix = state.suffixBounds = null;
+        state.splitIndex = state.breaks = state.lastBreakIndex = state.staticWidth = 0;
+        state.staticWidthStack = [];
     }
-    this._refreshBounds = refreshBounds;
-
-    // Find Next breakpoint for wrapping
-    function breakWrapPoints(state) {
+    // Wrap all lines
+    function wrapLines(state) {
         var prevNode, node, checkBounds;
-        while ((state.settings.maxLines <= 0 || state.settings.maxLines > state.breaks) &&
+        while ((!state.hasLineLimit || state.settings.maxLines > state.breaks) &&
             state.splitIndex < state.children.length) {
             prevNode = node; // store for compare
             node = state.splitNode = state.children[state.splitIndex]; // move to next node
 
-            updateStaticWidthStack(state, prevNode);
-            checkBounds = setNodeBounds(state);
+            updateStaticWidth(state, prevNode);
+            checkBounds = setSplitNodeBounds(state);
 
-            if (node.node.nodeType === 3 && state.settings.maxLines > 0) // Check elipse if this is the last line
-                if (requireElipse(state, node.node.data, node.node.data.length))
-                    checkbounds = state.suffixBounds;
+            var position = checkBounds.getPosition();
+            if (position !== '' && position !== 'static') // non static nodes are not wrapped
+            {
+                moveToNextNonChildNode(state);
+                continue;
+            }
 
-            var pxOverlap = state.staticWidth +
-                checkBounds.getOuterRight() - state.elementBounds.getInnerRight();
+            if (node.node.nodeType === 3 && state.hasLineLimit) // Check ellipsis if this is the last line
+                if (isEllipsisRequired(state, node.node.data, node.node.data.length))
+                    checkBounds = state.suffixBounds;
 
-            if (!tryBreakLine(state, pxOverlap))
+            var pxOverlap = getBoundsOverlap(state.staticWidth, checkBounds, state.elementBounds);
+
+            if (!tryAddBreak(state, pxOverlap))
                 break;
         }
     }
-    this._breakWrapPoints = breakWrapPoints;
-
-    function tryBreakLine(state, pxOverlap) {
+    // Create a linebreak and / or update splitindex
+    function tryAddBreak(state, pxOverlap) {
         if (pxOverlap >= 0)  // Node overlaps
             if (state.splitNode.node.nodeType === 3) { // Node is text
-                return initTextWrap(state, pxOverlap); // false means 1 char doesn't fit, stop trying to wrap
+                var wholeText = state.splitNode.node.data;
+                // false means 1 char doesn't fit, stop trying to wrap
+                return startSplitText(state, wholeText,
+                    getSplitEstimate(state.splitNode.bounds.getInnerWidth(), wholeText, pxOverlap, state.staticWidth));
             }
             else if (state.splitNode.node.childNodes.length === 0 ||
                     state.splitNode.bounds.getInnerWidth() < pxOverlap) {
                 // Single item too big to break
-                breakLine(state, state.splitNode.node);// Drop to own line
+                addBreak(state);// Drop to own line
                 state.splitIndex++;
             }
-            else
+            else {
                 state.splitIndex++; // Move to check children
+                if (state.lastBreakIndex === state.splitIndex - 1) state.lastBreakIndex++;
+            }
         else
-            moveToNextLevelNode(state); // no collision, skip children
+            moveToNextNonChildNode(state); // no collision, skip children
         return true;
     }
-
-    function setNodeBounds(state) {
+    // Set the bounds property of the current splitnode
+    function setSplitNodeBounds(state) {
         var node = state.splitNode;
         if (node.node.nodeType === 3) // node is text
             node.bounds = state.usesRange ? createRangeBounds(node.node) :
-                createTextBounds(state);
+                createTextBounds(state); // make a wrapper or create a range to measure
         else
             node.bounds = new ElementBounds(node.node); // Node isn't text
         return node.bounds;
     }
-
-    function updateStaticWidthStack(state, previousNode) {
+    // Create wrapper for measuring text and add to state tracking
+    function createTextBounds(state) {
+        var wrapper = wrapTextForSize(state.splitNode.node, state.settings.textMeasureClass, state.useInlineStyle);
+        state.textWrappers.push(wrapper);
+        return new ElementBounds(wrapper);
+    }
+    // Update static width based on current node / previous node levels
+    function updateStaticWidth(state, previousNode) {
         if (previousNode) // if there was a node before this
             if (previousNode.level < state.splitNode.level) { // if the new node is lower in the tree
                 state.staticWidthStack.push(state.staticWidth); // track new static width amount
@@ -188,309 +197,129 @@ function TextWrapper(element, settings) {
                 for (var i = 0; i < previousNode.level - state.splitNode.level; i++)
                     state.staticWidth = state.staticWidthStack.pop();// pop a width per lvl
     }
-
-    function createRangeBounds(node) {
-        var range;
-        if (!(range = TextWrapper.prototype.range))
-            range = TextWrapper.prototype.range = document.createRange();
-        range.selectNode(node);
-        return new ElementBounds(range);
-    }
-
-    function createTextBounds(state) {
-        var wrapper = wrapTextForSize(state.splitNode.node);
-        state.textWrappers.push(wrapper);
-        return new ElementBounds(wrapper);
-    }
-
-    // Make initial guess of text size, try to error on the high side so it can be verified by moving
-    // down to correct size
-    function initTextWrap(state, pxOverlap) {
-        var node = state.splitNode;
-        var originalText = node.node.data;
-        var pxPerChar = node.bounds.getInnerWidth() / originalText.trim().length;
-        var guessCharLength = Math.max(0, originalText.length - Math.ceil(pxOverlap / pxPerChar - state.staticWidth / pxPerChar));
-        var newText = rTrim(originalText.slice(0, guessCharLength));
-        if (requireElipse(state, originalText, guessCharLength))
-            newText = getElipseText(state,
-                { text: newText, guessLength: guessCharLength, suffix: false, originalText: originalText });
-        else
-            newText = getClosestBreakPointText(state,
-                { text: newText, guessLength: guessCharLength, suffix: false, originalText: originalText });
-        node.node.data = newText.text;
-        node.bounds.resetRect();
-        return splitTextPoint(state, newText);
-    }
-    this._initTextWrap = initTextWrap;
-
-    // Get the closest breakable character for a given guess
-    function getClosestBreakPointText(state, lastGuess) {
-        if (lastGuess.guessLength >= lastGuess.originalText.length || endsWithSpace(lastGuess.text))
-            return lastGuess; // Current guess breaks on whitespace
-        return getNextBreakPointText(state, lastGuess, true);
-    }
-
-    function requireElipse(state, originalText, guessLength) {
+    // Check if ellipsis is required, and add / hide it accordingly
+    function isEllipsisRequired(state, wholeText, guessLength) {
         var isLastLine = state.breaks === state.settings.maxLines - 1;
         var required = isLastLine &&
         // this isn't the last node
         (!(state.splitIndex === state.children.length - 1) ||
         // and last char to process
-        (guessLength < rTrim(originalText).length));
-        if (required)
-            addSuffix(state, '…');
-        else if (isLastLine)
-            hideNode(state.suffix);
+        (guessLength < rTrim(wholeText).length));
+        if (state.settings.overflow === 'ellipsis')
+            if (required)
+                addSuffix(state, '&#8230;');
+            else if (isLastLine)
+                hideNode(state.suffix);
         return required;
     }
-
-    function getElipseText(state, lastGuess, getLonger) {
-        if (lastGuess.suffix === false) addSuffix(state, '…');
-        lastGuess.suffix = true;
-        var originalText = lastGuess.originalText;
-        if (getLonger) {
-            while (endsWithSpace(originalText[lastGuess.guessLength - 1]) && lastGuess.guessLength < originalText.length) lastGuess.guessLength++;
-            lastGuess.text = rTrim(originalText.slice(0, lastGuess.guessLength));
-        }
-        else {
-            lastGuess.guessLength -= 2;
-            while (endsWithSpace(originalText[lastGuess.guessLength - 1]) && lastGuess.guessLength > 0) lastGuess.guessLength--;
-            lastGuess.text = rTrim(originalText.slice(0, Math.max(0, lastGuess.guessLength)));
-        };
-        return lastGuess;
+    // Update state of suffix according to previous state and desired state
+    function setSplitSuffix(state, guessText, wholeText, guessSuffix) {
+        var isWordBreak = guessText.trim().length !== 0 &&
+            guessText.length === rTrim(guessText).length &&
+            guessText.length < rTrim(wholeText).length;
+        if (guessSuffix === true && !isWordBreak)
+            hideNode(state.suffix);
+        else if (!guessSuffix && isWordBreak) // show suffix
+            addSuffix(state, '-');
+        else if (guessSuffix === 'hidden' && isWordBreak)
+            showNode(state.suffix);
+        return isWordBreak ? true : guessSuffix ? 'hidden' : null;
     }
-
-    function getNextBreakPointText(state, lastGuess, getLonger) {
-        var nextPossibleSpace,
-                forceBreak = state.splitIndex === state.lastBreakIndex,
-                minPrefix = state.settings.minWordWrapPrefix,
-                isWordBreak, originalText = lastGuess.originalText;
-        if (requireElipse(state, lastGuess.guessLength))
-            return getElipseText(state, lastGuess, getLonger);
-        if (getLonger) {
-            nextPossibleSpace = originalText.indexOf(' ', lastGuess.guessLength);
-            if (nextPossibleSpace === -1) nextPossibleSpace = originalText.length - 1;
-
-            // No word break allowed or Last valid space isn't atleast minPrefix characters away
-            if (minPrefix < 1 || (nextPossibleSpace + 1) - lastGuess.guessLength < minPrefix) { // break on space
-                isWordBreak = false;
-                lastGuess.guessLength = nextPossibleSpace + 1;
-                lastGuess.text = originalText.slice(0, lastGuess.guessLength);
-            }
-            else { // break in word
-                isWordBreak = true;
-                lastGuess.guessLength += minPrefix;
-                lastGuess.text = originalText.slice(0, lastGuess.guessLength);
-            }
-        }
-        else {
-            nextPossibleSpace = Math.max(0, originalText.lastIndexOf(' ', lastGuess.guessLength - 2));
-            if (forceBreak && nextPossibleSpace === 0)
-                minPrefix = 1; // There must be a break in this node, unlock word breaking
-            // No word break allowed or Last valid space isn't atleast minPrefix characters away
-            if (minPrefix < 1 || lastGuess.guessLength - (nextPossibleSpace + 1) < minPrefix) {
-                isWordBreak = false;
-                lastGuess.guessLength = nextPossibleSpace;
-                lastGuess.text = originalText.slice(0, nextPossibleSpace);
-                if (lastGuess.suffix === true)
-                    hideNode(state.suffix);
-            }
-            else {
-                isWordBreak = true;
-                lastGuess.guessLength -= 1;
-                lastGuess.text = originalText.slice(0, lastGuess.guessLength);
-            }
-
-            if (isWordBreak) {
-                if (!lastGuess.suffix) // show suffix
-                    addSuffix(state, '-');
-                else if (lastGuess.suffix === 'hidden')
-                    showNode(state.suffix);
-                lastGuess.suffix = true;
-            }
-            else {
-                if (lastGuess.suffix === true) hideNode(state.suffix); // Hide suffix
-            }
-        }
-        return lastGuess;
-    }
-
-    function breakLine(state) {
-        if (state.settings.maxLines === 0 || state.settings.maxLines > state.breaks) {
+    // Add a break before the current splitNode
+    function addBreak(state) {
+        if (!state.hasLineLimit || state.settings.maxLines > state.breaks) {
             var node = state.children[state.splitIndex].node;
             insertNewElement('br', state.settings.breakClass, null, node, node.parentNode);
             state.breaks++;
             state.lastBreakIndex = state.splitIndex;
         }
     }
-
-    // Split a text node where the line should be broken
-    function splitTextPoint(state, firstGuess) {
-        var node = state.splitNode,
-            currentGuess = firstGuess,
-            prevGuess,
-            currentBounds = firstGuess.suffix === true ?
-            state.suffixBounds : node.bounds, // Use suffix bounds if present
-            makeLonger = currentBounds.getOuterRight()
-            + state.staticWidth < state.elementBounds.getInnerRight(); // true if correctly broken text is longer
+    // Split and measure text until correct length is found
+    function startSplitText(state, wholeText, guessLength) {
+        var node = state.splitNode, guessText, guessSuffix, prevSuffix, prevText, checkBounds, makeLonger, ellipsis, pxOverlap;
         do {
-            if (makeLonger) // clone previous guess so it can be reused when correct length is found
-                prevGuess = {
-                    text: currentGuess.text, suffix: currentGuess.suffix,
-                    guessLength: currentGuess.guessLength
-                };
-            currentGuess = getNextBreakPointText(state, currentGuess, makeLonger); // get next guess
-            state.splitNode.node.data = rTrim(currentGuess.text); // apply next guess
-            currentBounds = currentGuess.suffix === true ? state.suffixBounds : node.bounds;
-            currentBounds.resetRect();
+            if (makeLonger) { prevText = guessText; prevSuffix = guessSuffix; } // Store prev for quick return if making longer
+            guessSuffix = ellipsis = isEllipsisRequired(state, wholeText, guessLength); // Check for and init ellipsis
+            guessText = getValidSplit(wholeText, guessLength, ellipsis ? 1 : state.settings.minWordWrapPrefix,
+                state.splitIndex === state.lastBreakIndex, makeLonger === undefined ? true : makeLonger);
+            if (!ellipsis) guessSuffix = setSplitSuffix(state, guessText, wholeText, guessSuffix); // Set suffix if not ellipsis
+            state.splitNode.node.data = guessText; // Update node text
+            (checkBounds = guessSuffix === true ? state.suffixBounds : node.bounds).resetRect();// set bounds to suffix or text
+            pxOverlap = getBoundsOverlap(state.staticWidth, checkBounds, state.elementBounds); // get overlap
+            if (makeLonger == undefined) makeLonger = pxOverlap < 0; // set makelonger if it hasn't been set
+            guessLength = guessText.length;
         }
-        while ((makeLonger && currentBounds.getOuterRight() + state.staticWidth < state.elementBounds.getInnerRight() && currentGuess.text.length < originalText.length)
-            || (!makeLonger && currentBounds.getOuterRight() + state.staticWidth >= state.elementBounds.getInnerRight() && currentGuess.text.length > 0));
-        if (makeLonger) {
-            if (prevGuess.suffix !== currentGuess.suffix) {
-                if (prevGuess.suffix === true)
-                    showNode(state.suffix);
-                if (prevGuess.suffix === false || prevGuess.suffix === 'hidden')
-                    hideNode(state.suffix);
-            }
-            currentGuess = prevGuess;
-            state.splitNode.node.data = rTrim(currentGuess.text);
+        while ((makeLonger && pxOverlap < 0 && guessText.length < wholeText.length) // repeat until edge found
+            || (!makeLonger && pxOverlap >= 0 && guessText.length > 0));
+
+        if (makeLonger && pxOverlap >= 0) { // Drop back a breakpoint if longer
+            guessText = prevText;
+            if (!isEllipsisRequired(state, wholeText, guessText.length))
+                guessSuffix = setSplitSuffix(state, guessText, wholeText, guessSuffix);
+            state.splitNode.node.data = guessText;
         }
-        if (currentGuess.text.length === 0) {
-            if (currentGuess.suffix === true) {
-                state.suffix.parentNode.insertBefore(state.suffix, state.suffix.previousSibling);
-                state.suffix = null;
-            }
-            if (state.lastBreakIndex === state.splitIndex)
-                return false; // no characters can fit on new line, exit;
-            state.splitNode.node.data = firstGuess.originalText;
-            breakLine(state);
+
+        return endSplitText(state, guessText, wholeText, guessSuffix);
+    }
+    // Finalize text split and suffix placement, return false if no more splitting is viable
+    function endSplitText(state, guessText, wholeText, guessSuffix) {
+        var breakTextNode, actualLength = guessText.trim().length;
+        if (actualLength === 0) {
+            state.splitNode.node.data = wholeText;
+            hideNode(state.suffix);
+            if (state.lastBreakIndex === state.splitIndex) return false;
+            guessSuffix = false;
+            breakTextNode = state.splitNode.node;
+        }
+        else if (guessText.length === wholeText.length) {// Must be last  line of text
+            state.splitIndex++;
+            return false;
         }
         else {
-            var newTextNode = document.createTextNode(rTrim(firstGuess.originalText.slice(currentGuess.text.length)));
-            if (currentGuess.suffix === true) {
-                state.suffix.parentNode.insertBefore(newTextNode, state.suffix.nextSibling);
-                state.suffix = null;
-            }
-            else
-                insertAfterText(state.splitNode.node, newTextNode, state.usesRange);
-
-            state.children.splice(state.splitIndex + 1, 0, { node: newTextNode, level: state.splitNode.level });
+            breakTextNode = document.createTextNode(wholeText.slice(guessText.length));
+            insertAfterText(guessSuffix === true ? state.suffix : state.splitNode.node, breakTextNode, state.usesRange);
+            state.children.splice(state.splitIndex + 1, 0, { node: breakTextNode, level: state.splitNode.level });
             state.splitIndex++; // move forward to new node
-            breakLine(state, newTextNode);
         }
+        if (guessSuffix === true)
+            state.suffix = null; // lock suffix
+        addBreak(state, breakTextNode);
         return true;
     }
-    this._splitTextPoint = splitTextPoint;
-
-    // Wrap text node in clone used to check size
-    function wrapTextForSize(state) {
-        var node = state.splitNode;
-        var parent = node.parentNode;
-        var clone = parent.cloneNode();
-        if (state.settings.useInlineStyles)
-            clone.style.cssText =
-                'position:static;visibility:visible;overflow:visible;white-space:nowrap;top:auto;left:auto;right:auto;bottom:auto;width:auto;height:auto;display:inline;border-width:0;padding:0;margin:0';
-        clone.className = state.settings.textMeasureClass;
-        // Put hidden size test clone in document
-        parent.insertBefore(clone, node).insertBefore(node);
-        return clone;
-    }
-    this._wrapTextForSize = wrapTextForSize;
-
-    function moveToNextLevelNode(state) {
-        var current = state.children[++state.splitIndex], level = state.splitNode.level;
+    // Move splitindex to the next sibling being tracked from the current split node 
+    function moveToNextNonChildNode(state) {
+        var current = state.children[state.splitIndex], level;
+        if (current) level = current.level;
+        current = state.children[++state.splitIndex];
         while (current && current.level > level) {
             state.splitIndex++;
             current = state.children[state.splitIndex + 1]
         }
         if (!current) state.splitIndex++;
     }
-
+    // move splitindex to the last sibling being tracked from the current split node 
     function moveToLastLevelNode(state) {
-        var current = state.children[state.splitIndex + 1], level = state.splitNode.level;
+        var current = state.children[state.splitIndex], level;
+        if (current) level = current.level;
+        current = state.children[state.splitIndex + 1];
         while (current && current.level >= level) {
             state.splitIndex++;
             current = state.children[state.splitIndex + 1];
         }
     }
-    this._moveToLastLevelNode = moveToLastLevelNode;
-
-    function hideLevels(state) {
+    // Hide overflow, starting at the current splitIndex
+    function hideOverflow(state) {
         // Start at current split node
-        var firstNode, wrapper;
+        var firstNode;
         // process until no more nodes
         while (firstNode = state.children[state.splitIndex]) {
-            // try to get existingwrapper
-            if (wrapper = state.hideWrappers[firstNode.level])
-                if (wrapper.firstChild === firstNode.node)
-                    break; // break if already wrapped
-                else
-                    unwrapInner(wrapper);
             moveToLastLevelNode(state)
-            hideNodes(state, firstNode, state.children[state.splitIndex]);
+            state.hideWrappers[firstNode.level] =
+                hideNodes(firstNode.node, state.children[state.splitIndex],
+                state.settings.hiddenClass, state.settings.useInlineStyles);
             state.splitIndex++;
         }
     }
-    this._hideLevels = hideLevels;
-
-    function hideNodes(state, firstNode, endNode) {
-        // create hide span
-        var hideSpan = document.createElement('span');
-        hideSpan.className = state.settings.hiddenClass;
-        if (state.settings.useInlineStyles)
-            hideSpan.style.cssText = 'display:none';
-
-        var current = firstNode.node;
-        var next;
-        var parent = firstNode.node.parentNode;
-        var endNext = endNode.nextSibling;
-        do {
-            next = current.nextSibling;
-            hideSpan.insertBefore(current);
-        } while (current !== endNode.node && (current = next))
-        parent.insertBefore(hideSpan, endNext);
-        state.hideWrappers[firstNode.level] = hideSpan;
-    }
-    this._hideNodes = hideNodes;
-
-    // Order by a depth first type pattern
-    function flattenElementTree(element) {
-        var tree = [],
-            parentStack = [],
-            current = element.firstChild,
-            scanDown = true,
-            normalizeNode = null,
-            lvl = 0;
-        while (current != null) { // scan until all nodes processed
-            while (current && scanDown) { // scan as deep as possible
-                parentStack.push(current); // push each node onto parent stack
-                if (current.nodeType === 3) // normalize and clean
-                {
-                    while (current.nextSibling && current.nextSibling.nodeType === 3) {
-                        current.data += current.nextSibling.data;
-                        deleteNode(current.nextSibling);
-                    }
-                    current.data = current.data.replace(/[\t\n\r ]+/g, ' ')
-                }
-                tree.push({ node: current, level: lvl }); // Store in tree
-                lvl++; // move down a level
-                scanDown = (current = current.firstChild) !== null; // set scan down according to children
-            }
-
-            do {
-                // pop a node off the parent stack and move up to its level
-                // until it has a sibling
-                current = parentStack.pop();
-                lvl--;
-            } while (!current.nextSibling && parentStack.length > 0)
-            current = current.nextSibling; // Move forward and search deep again
-            scanDown = true;
-        }
-        return tree;
-    };
-    this._flattenElementTree = flattenElementTree;
-
     // Create or unhide / move a suffix
     function addSuffix(state, text) {
         var node = state.splitNode.node;
@@ -504,8 +333,33 @@ function TextWrapper(element, settings) {
         insertAfterText(state.splitNode.node, state.suffix, state.usesRange);
         showNode(state.suffix);
     }
+    // Remove previous formatting in element from textwrapper
+    function clearFormatting(state) {
+        if (state.isRefresh) {
+            state.hideWrappers.forEach(unwrapInner);
+            state.hideWrappers = [];
+        }
+        else
+            removeSpans(state.element, state.settings.hiddenClass, true);
 
-
+        removeBreaks(state.element, state.settings.breakClass);
+        removeSpans(state.element, state.settings.suffixClass, false);
+    }
+    //#endregion 
+    //#region Helper Methods
+    // Make initial guess of desired text length for element
+    function getSplitEstimate(foundWidth, wholeText, pxOverlap, staticWidth) {
+        var pxPerChar = foundWidth / wholeText.trim().length;
+        return Math.max(0, Math.ceil(wholeText.length - pxOverlap / pxPerChar - staticWidth / pxPerChar));
+    }
+    function createRangeBounds(node) {
+        var range;
+        if (!(range = TextWrapper.prototype.range))
+            range = TextWrapper.prototype.range = document.createRange();
+        range.selectNode(node);
+        return new ElementBounds(range);
+    }
+    // Remove breaks in element from TextWrapper
     function removeBreaks(element, breakClass, suffixClass) {
         var breaks = element.getElementsByTagName('br');
         var current;
@@ -525,21 +379,158 @@ function TextWrapper(element, settings) {
             }
         }
     }
-    this._removeBreaks = removeBreaks;
-
-    function removeWrap(state) {
-        if (state.isRefresh) {
-            state.hideWrappers.forEach(unwrapInner);
-            state.hideWrappers = [];
-        }
-        else
-            removeSpans(state.element, state.settings.hiddenClass, true);
-
-        removeBreaks(state.element, state.settings.breakClass);
-        removeSpans(state.element, state.settings.suffixClass, false);
+    // Get new bounds, return true if refresh required
+    function isBoundsChanged(bounds, forceRefresh) {
+        var ol = bounds.getInnerLeft(),
+            or = bounds.getInnerRight();
+        bounds.resetRect();
+        return forceRefresh || or !== bounds.getInnerRight() ||
+            ol !== bounds.getInnerLeft();
     }
-    this._removeWrap = removeWrap;
+    // Wrap text node in clone used to check size
+    function wrapTextForSize(node, className, useInlineStyles) {
+        var parent = node.parentNode;
+        var clone = parent.cloneNode();
+        if (useInlineStyles)
+            clone.style.cssText =
+                'position:static;visibility:visible;overflow:visible;white-space:nowrap;top:auto;left:auto;right:auto;bottom:auto;width:auto;height:auto;display:inline;border-width:0;padding:0;margin:0';
+        clone.className += ' ' + className;
+        // Put hidden size test clone in document
+        parent.insertBefore(clone, node).insertBefore(node);
+        return clone;
+    }
+    // Get next valid split index of a string based on guess and desired direction of adjustment
+    function getValidSplit(wholeText, guessLength, minWordBreakLength, forceBreak, makeLonger) {
+        var nextValidIndex = makeLonger ?
+            wholeText.indexOf(' ', guessLength) : wholeText.lastIndexOf(' ', guessLength - 2);
+        if (forceBreak && ((nextValidIndex === -1 && !makeLonger) || (guessLength <= 0 && makeLonger)))
+            minWordBreakLength = 1;
+        if (makeLonger && nextValidIndex === -1) nextValidIndex = wholeText.length - 1;
+        var breakSize = Math.abs((makeLonger ? wholeText.lastIndexOf(' ', guessLength) : nextValidIndex) + 1 - guessLength);
+        if (minWordBreakLength > 0 && (makeLonger ? breakSize >= minWordBreakLength : breakSize > minWordBreakLength))
+            nextValidIndex = makeLonger ? guessLength : guessLength - 2;
+        if (isSpace(wholeText, nextValidIndex - 1)) nextValidIndex += makeLonger ? 1 : -1; // skip space character
+        return wholeText.slice(0, Math.max(0, nextValidIndex + 1));
+    }
+    // Order by a depth first type pattern
+    function getFlattenedChildren(element) {
+        var nodes = [], parentStack = [], current = element.firstChild,
+            scanDown = true,
+            normalizeNode = null,
+            lvl = 0;
+        while (current != null) { // scan until all nodes processed
+            while (current && scanDown) { // scan as deep as possible
+                parentStack.push(current); // push each node onto parent stack
+                if (current.nodeType === 3) // normalize and clean
+                {
+                    while (current.nextSibling && current.nextSibling.nodeType === 3) {
+                        current.data += current.nextSibling.data;
+                        deleteNode(current.nextSibling);
+                    }
+                    current.data = current.data.replace(/[\t\n\r ]+/g, ' ')
+                }
+                nodes.push({ node: current, level: lvl }); // Store in tree
+                lvl++; // move down a level
+                scanDown = (current = current.firstChild) !== null; // set scan down according to children
+            }
+            do {
+                current = parentStack.pop();// pop a node off the parent stack and move up to its level
+                lvl--;
+            } while (!current.nextSibling && parentStack.length > 0)
+            current = current.nextSibling; // Move forward and search deep again
+            scanDown = true;
+        }
+        return nodes;
+    };
+    // Get extent to which 2 elementbounds overlap considering any additional static width on the inner
+    function getBoundsOverlap(staticWidth, innerItemBounds, outerItemBounds) {
+        return staticWidth +
+                innerItemBounds.getOuterRight() - outerItemBounds.getInnerRight();
+    }
+    //#endregion
+    //#region Utility Dom Manipulation
+    // Wrap 2 siblings and everything in between with hide span
+    function hideNodes(startNode, endNode, className, useInlineStyle) {
+        // create hide span
+        var hideSpan = document.createElement('span');
+        hideSpan.className = className;
+        if (useInlineStyle) hideSpan.style.display = 'none';
 
+        var currentNode = startNode,
+            nextNode,
+            parentNode = startNode.parentNode,
+            nextSibling = endNode.nextSibling;
+        do {
+            nextNode = currentNode.nextSibling;
+            hideSpan.insertBefore(currentNode);
+        } while ((currentNode = nextNode) && nextNode != nextSibling)
+        parentNode.insertBefore(hideSpan, nextSibling);
+        return hideSpan;
+    }
+    // Set node css to display:none
+    function hideNode(node) {
+        if (!node) return;
+        node.style.display = 'none';
+    }
+    // Clear node display property
+    function showNode(node) {
+        node.style.display = '';
+    }
+    // Delete node from dom
+    function deleteNode(node) { node.parentNode.removeChild(node); }
+    // Remove node parent, keep children
+    function unwrap(node) {
+        var parent = node.parentNode;
+        var nodes = parent.childNodes;
+        if (parent.hasChildNodes)
+            while (parent.hasChildNodes()) {
+                parent.parentNode.insertBefore(parent.firstChild, parent);
+            }
+        parent.parentNode.removeChild(parent);
+    }
+    // Remove node, keep children
+    function unwrapInner(node) {
+        if (node.firstChild) unwrap(node.firstChild);
+        else deleteNode(node);
+    }
+    // Remove or unwrap spans matching description
+    function removeSpans(element, spanClass, unwrap) {
+        var spans = element.getElementsByTagName('span');
+        var current;
+        for (var i = spans.length - 1; i >= 0; i--) {
+            current = spans[i];
+            var classes = current.className.split(' ');
+            // remove suffix
+            if (classes.indexOf(spanClass) !== -1)
+                if (unwrap)
+                    unwrapInner(current);
+                else
+                    current.parentNode.removeChild(current);
+        }
+    }
+    // Create and optionally insert a new element
+    function insertNewElement(tagName, className, innerHTML, nextSibling, parent) {
+        var node = document.createElement(tagName);
+        if (className) node.className = className;
+        if (innerHTML) node.innerHTML = innerHTML;
+        if (parent) parent.insertBefore(node, nextSibling);
+        return node;
+    }
+    // Insert a node after a text node taking into acount text wrapper elements
+    function insertAfterText(textNode, insertNode, usesRange) {
+        var nextSibling = usesRange ? textNode.nextSibling : textNode.parentNode.nextSibling;
+        var parent = usesRange ? textNode.parentNode : textNode.parentNode.parentNode;
+        parent.insertBefore(insertNode, nextSibling);
+    }
+    //#endregion
+    //#region Utility string functions
+    // Right trim string space
+    function rTrim(item) { return item.replace(/\s+$/gm, ''); }
+    // Check if specified char of string is space
+    function isSpace(string, index) { return /[\t\n\r ]$/.test(string[index]); }
+    //#endregion
+
+    // Track / calculate bounds of an element
     function ElementBounds(element, innerWidthSetting) {
         var boundingRect,
             marginRight,
@@ -557,13 +548,6 @@ function TextWrapper(element, settings) {
                 innerWidthRatio = parseInt(innerWidthSetting) / 100;
             else
                 staticInnerWidth = parseInt(innerWidthSetting);
-        }
-
-        // quit early if wrong position type
-        if (style) {
-            var position = style.getPropertyValue('position');
-            if (position === 'relative' || position === 'absolute' || position === 'fixed')
-                return null; // text wrap has no use for these
         }
 
         //#region Private Functions
@@ -584,6 +568,10 @@ function TextWrapper(element, settings) {
         this.resetRect = function () {
             boundingRect = undefined;
         };
+
+        this.getPosition = function () {
+            return style ? style.getPropertyValue('position') : '';
+        }
 
         this.getBoundingRect = function () {
             if (boundingRect === undefined) {
@@ -614,7 +602,7 @@ function TextWrapper(element, settings) {
             return this.getBoundingRect().left - this.getMarginLeft();
         };
         this.getOuterRight = function () {
-            return this.getBoundingRect().right - this.getMarginRight();
+            return this.getBoundingRect().right + this.getMarginRight();
         };
         this.getInnerLeft = function () {
             return this.getBoundingRect().left + this.getBorderLeft() + this.getPaddingLeft();
@@ -647,77 +635,47 @@ function TextWrapper(element, settings) {
                 (paddingLeft = parseInt(style.getPropertyValue('padding-left'))) : paddingLeft;
         };
     }
-    this.elementBounds = ElementBounds;
 
-    //#region Utility Dom Manipulation
-    function hideNode(node) {
-        var text = node.style.cssText;
-        if (text.indexOf('display:none') === -1)
-            node.style.cssText = 'display:none;' + text;
-    }
+    //#region Test Access
+    this._wrapLines = wrapLines;
+    this._resetState = resetState;
+    this._tryAddBreak = tryAddBreak;
+    this._setSplitNodeBounds = setSplitNodeBounds;
+    this._createTextBounds = createTextBounds;
+    this._updateStaticWidth = updateStaticWidth;
+    this._isEllipsisRequired = isEllipsisRequired;
+    this._setSplitSuffix = setSplitSuffix;
+    this._addBreak = addBreak;
+    this._startSplitText = startSplitText;
+    this._endSplitText = endSplitText;
+    this._moveToNextNonChildNode = moveToNextNonChildNode;
+    this._moveToLastLevelNode = moveToLastLevelNode;
+    this._hideOverflow = hideOverflow;
+    this._addSuffix = addSuffix;
+    this._clearFormatting = clearFormatting;
+    this._createRangeBounds = createRangeBounds;
+    this._getSplitEstimate = getSplitEstimate;
+    this._removeBreaks = removeBreaks;
+    this._isBoundsChanged = isBoundsChanged;
+    this._wrapTextForSize = wrapTextForSize;
+    this._getValidSplit = getValidSplit;
+    this._getFlattenedChildren = getFlattenedChildren;
+    this._getBoundsOverlap = getBoundsOverlap;
+    this._hideNodes = hideNodes;
     this._hideNode = hideNode;
-    function showNode(node) {
-        var text = node.style.cssText;
-        if (text.indexOf('display:none') !== -1)
-            node.style.cssText = text.replace('display:none', '');
-    }
     this._showNode = showNode;
-    function deleteNode(node) { node.parentNode.removeChild(node); }
     this._deleteNode = deleteNode;
-    function unwrap(node) {
-        var parent = node.parentNode;
-        var nodes = parent.childNodes;
-        if (parent.hasChildNodes)
-            while (parent.hasChildNodes()) {
-                parent.parentNode.insertBefore(parent.firstChild, parent);
-            }
-        parent.parentNode.removeChild(parent);
-    }
     this._unwrap = unwrap;
-    function unwrapInner(node) {
-        if (node.firstChild) unwrap(node.firstChild);
-        else deleteNode(node);
-    }
     this._unwrapInner = unwrapInner;
-    function removeSpans(element, spanClass, unwrap) {
-        var spans = element.getElementsByTagName('span');
-        var current;
-        for (var i = spans.length - 1; i >= 0; i--) {
-            current = spans[i];
-            var classes = current.className.split(' ');
-            // remove suffix
-            if (classes.indexOf(spanClass) !== -1)
-                if (unwrap)
-                    unwrapInner(current);
-                else
-                    current.parentNode.removeChild(current);
-        }
-    }
     this._removeSpans = removeSpans;
-    function insertNewElement(tagName, className, innerHTML, nextSibling, parent) {
-        var node = document.createElement(tagName);
-        if (className) node.className = className;
-        if (innerHTML) node.innerHTML = innerHTML;
-        if (parent) parent.insertBefore(node, nextSibling);
-        return node;
-    }
     this._insertNewElement = insertNewElement;
-    function insertAfterText(textNode, insertNode, usesRange) {
-        var nextSibling = usesRange ? textNode.nextSibling : textNode.parentNode.nextSibling;
-        var parent = usesRange ? textNode.parentNode : textNode.parentNode.parentNode;
-        parent.insertBefore(insertNode, nextSibling);
-    }
     this._insertAfterText = insertAfterText;
-    //#endregion
-    //#region Utility string functions
-    function rTrim(item) { return item.replace(/\s+$/gm, ''); }
     this._rTrim = rTrim;
-    function lTrim(item) { return item.replace(/^\s+/gm, ''); }
-    this._lTrim = lTrim;
-    function endsWithSpace(item) { return /[\t\n\r ]$/.test(item); }
-    this._endsWithSpace = endsWithSpace;
+    this._elementBounds = ElementBounds;
+    this._isSpace = isSpace;
     //#endregion
 
+    // Utility method for debouncing resize
     function debounce(func, wait) {
         var timeout;
         return function () {
@@ -729,7 +687,7 @@ function TextWrapper(element, settings) {
             }, wait);
         };
     };
-
+    // Remove resize handler
     function destroy() {
         if (model.handlerFunction) {
             if (window.addEventListener) {
@@ -740,6 +698,7 @@ function TextWrapper(element, settings) {
             model.handlerFunction = null;
         }
     }
+
     //#region Initialize
     if (element) {
         var model = new this.TextWrapperModel(element, settings || new this.TextWrapperSettings());
