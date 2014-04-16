@@ -61,7 +61,6 @@ describe("textWrap", function () {
         expect(model.staticWidthStack.length).toEqual(0);
     });
 
-    //this._tryAddBreak = tryAddBreak;
     it('tryAddBreak should break before and item too large to break, unless it is the beginning of a line', function () {
         var model = new TextWrapper.prototype.TextWrapperModel(item);
         var item = document.createElement('SPAN');
@@ -288,7 +287,7 @@ describe("textWrap", function () {
         expect(model.lastBreakIndex).toEqual(0);
     });
 
-    it('startSplitTextWith a short guess no possible break', function () {
+    it('startSplitText With a short guess no possible break', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -306,7 +305,26 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a long guess no possible break', function () {
+    it('startSplitText With a long guess and only possible break is leading space', function () {
+        var item = document.createElement('SPAN');
+        document.body.insertBefore(item, document.body.firstChild);
+        var settings = new TextWrapper.prototype.TextWrapperSettings();
+        settings.maxLines = 1;
+        item.innerHTML = ' asdf';
+        var model = new TextWrapper.prototype.TextWrapperModel(item, settings);
+        model.children = w._getFlattenedChildren(item);
+        model.splitIndex = 0;
+        model.splitNode = model.children[model.splitIndex];
+        model.splitNode.bounds = w._createRangeBounds(model.splitNode.node);
+        model.elementBounds = new w._elementBounds(item, '1px');
+        var result = w._startSplitText(model, ' asdf', 3);
+        expect(item.firstChild.data).toEqual(' asdf');
+        expect(result).toEqual(false);
+        expect(model.splitIndex).toEqual(0);
+        document.body.removeChild(document.body.firstChild);
+    });
+
+    it('startSplitText With a long guess no possible break', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -324,7 +342,7 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a long guess and forcebreak on space default behavior', function () {
+    it('startSplitText With a long guess and forcebreak on space default behavior', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -345,7 +363,7 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a short guess and forcebreak on space default behavior', function () {
+    it('startSplitText With a short guess and forcebreak on space default behavior', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -366,7 +384,7 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a very long guess and break on space default behavior', function () {
+    it('startSplitText With a very long guess and break on space default behavior', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -386,7 +404,7 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a long guess and break on space default behavior', function () {
+    it('startSplitText With a long guess and break on space default behavior', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -406,7 +424,7 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a short guess and break on space default behavior', function () {
+    it('startSplitText With a short guess and break on space default behavior', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -426,7 +444,7 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a very short guess and break on space default behavior', function () {
+    it('startSplitText With a very short guess and break on space default behavior', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -446,7 +464,7 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a short guess and no break default behavior', function () {
+    it('startSplitText With a short guess and no break default behavior', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();
@@ -463,7 +481,7 @@ describe("textWrap", function () {
         document.body.removeChild(document.body.firstChild);
     });
 
-    it('startSplitTextWith a short guess and no word break default behavior', function () {
+    it('startSplitText With a short guess and no word break default behavior', function () {
         var item = document.createElement('SPAN');
         document.body.insertBefore(item, document.body.firstChild);
         var settings = new TextWrapper.prototype.TextWrapperSettings();

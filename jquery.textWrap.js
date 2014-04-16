@@ -249,8 +249,8 @@ function TextWrapper(element, settings) {
             if (makeLonger == undefined) makeLonger = pxOverlap < 0; // set makelonger if it hasn't been set
             guessLength = guessText.length;
         }
-        while ((makeLonger && pxOverlap < 0 && guessText.length < wholeText.length) // repeat until edge found
-            || (!makeLonger && pxOverlap >= 0 && guessText.length > 0));
+        while ((makeLonger && pxOverlap < 0 && guessText.trim().length < wholeText.trim().length) // repeat until edge found
+            || (!makeLonger && pxOverlap >= 0 && guessText.trim().length > 0));
 
         if (makeLonger && pxOverlap >= 0) { // Drop back a breakpoint if longer
             guessText = prevText;
